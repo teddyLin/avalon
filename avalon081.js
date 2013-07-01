@@ -1,5 +1,5 @@
 //==================================================
-// avalon 0.82 独立版  by 司徒正美 2013.6.28
+// avalon 0.81 独立版  by 司徒正美 2013.6.28
 // 疑问:
 //    什么协议? MIT, (五种开源协议的比较(BSD,Apache,GPL,LGPL,MIThttp://www.awflasher.com/blog/archives/939)
 //    依赖情况? 没有任何依赖，可自由搭配jQuery, mass等使用,并不会引发冲突问题
@@ -283,7 +283,10 @@
      *                      模块加载系统                                *
      **********************************************************************/
     var head = DOC.head || DOC.getElementsByTagName("head")[0] //HEAD元素
-
+    var loadings = [] //正在加载中的模块列表
+    var factorys = [] //储存需要绑定ID与factory对应关系的模块（标准浏览器下，先parse的script节点会先onload）
+    var rmakeid = /(#.+|\W)/g //用于处理掉href中的hash与所有特殊符号
+    var basepath
     var modules = avalon.modules = {
         "ready!": {
             exports: avalon
@@ -303,375 +306,368 @@
         }
         return this
     }
-
-    new function() {
-        var loadings = [] //正在加载中的模块列表
-        var factorys = [] //储存需要绑定ID与factory对应关系的模块（标准浏览器下，先parse的script节点会先onload）
-        var rmakeid = /(#.+|\W)/g //用于处理掉href中的hash与所有特殊符号
-        var basepath
-
-        var plugins = {
-            js: function(url, shim) {
-                var id = cleanUrl(url)
-                if (!modules[id]) { //如果之前没有加载过
-                    modules[id] = {
-                        id: id,
-                        parent: parent,
-                        exports: {}
-                    }
-                    if (shim) { //shim机制
-                        require(shim.deps || "", function() {
-                            loadJS(url, id, function() {
-                                modules[id].state = 2
-                                modules[id].exports = typeof shim.exports === "function" ?
-                                        shim.exports() : window[shim.exports]
-                                checkDeps()
-                            })
+    var plugins = {
+        js: function(url, shim) {
+            var id = cleanUrl(url)
+            if (!modules[id]) { //如果之前没有加载过
+                modules[id] = {
+                    id: id,
+                    parent: parent,
+                    exports: {}
+                }
+                if (shim) { //shim机制
+                    require(shim.deps || "", function() {
+                        loadJS(url, id, function() {
+                            modules[id].state = 2
+                            modules[id].exports = typeof shim.exports === "function" ?
+                                    shim.exports() : window[shim.exports]
+                            checkDeps()
                         })
-                    } else {
-                        loadJS(url, id)
-                    }
+                    })
+                } else {
+                    loadJS(url, id)
                 }
-                return id
-            },
-            css: function(url) {
-                var id = url.replace(rmakeid, "")
-                if (!DOC.getElementById(id)) {
-                    var node = DOC.createElement("link")
-                    node.rel = "stylesheet"
-                    node.href = url
-                    node.id = id
-                    head.insertBefore(node, head.firstChild)
-                }
-            },
-            alias: function(val) {
-                var map = kernel.alias
-                for (var c in val) {
-                    if (ohasOwn.call(val, c)) {
-                        var prevValue = map[c]
-                        var currValue = val[c]
-                        if (prevValue) {
-                            avalon.error("注意" + c + "出经重写过")
-                        }
-                        map[c] = currValue
+            }
+            return id
+        },
+        css: function(url) {
+            var id = url.replace(rmakeid, "")
+            if (!DOC.getElementById(id)) {
+                var node = DOC.createElement("link")
+                node.rel = "stylesheet"
+                node.href = url
+                node.id = id
+                head.insertBefore(node, head.firstChild)
+            }
+        },
+        alias: function(val) {
+            var map = kernel.alias
+            for (var c in val) {
+                if (ohasOwn.call(val, c)) {
+                    var prevValue = map[c]
+                    var currValue = val[c]
+                    if (prevValue) {
+                        avalon.error("注意" + c + "出经重写过")
                     }
+                    map[c] = currValue
                 }
             }
         }
-        plugins.css.ext = ".css"
-        plugins.js.ext = ".js"
-        kernel.plugins = plugins
-        kernel.alias = {}
+    }
+    plugins.css.ext = ".css"
+    plugins.js.ext = ".js"
+    kernel.plugins = plugins
+    kernel.alias = {}
 
-        function cleanUrl(url) {
-            return (url || "").replace(/[?#].*/, "")
-        }
+    function cleanUrl(url) {
+        return (url || "").replace(/[?#].*/, "")
+    }
+    new function() {
         var cur = getCurrentScript(true)
         if (!cur) { //处理window safari的Error没有stack的问题
             cur = avalon.slice(document.scripts).pop().src
         }
         var url = cleanUrl(cur)
         basepath = kernel.base = url.slice(0, url.lastIndexOf("/") + 1)
+    }
 
-        function getCurrentScript(base) {
-            // 参考 https://github.com/samyk/jiagra/blob/master/jiagra.js
-            var stack
-            try {
-                avalon["x"+Math.random()]() //强制报错,以便捕获e.stack
-            } catch (e) { //safari的错误对象只有line,sourceId,sourceURL
-                stack = e.stack
-                if (!stack && window.opera) {
-                    //opera 9没有e.stack,但有e.Backtrace,但不能直接取得,需要对e对象转字符串进行抽取
-                    stack = (String(e).match(/of linked script \S+/g) || []).join(" ")
-                }
-            }
-            if (stack) {
-                /**e.stack最后一行在所有支持的浏览器大致如下:
-                 *chrome23:
-                 * at http://113.93.50.63/data.js:4:1
-                 *firefox17:
-                 *@http://113.93.50.63/query.js:4
-                 *opera12:http://www.oldapps.com/opera.php?system=Windows_XP
-                 *@http://113.93.50.63/data.js:4
-                 *IE10:
-                 *  at Global code (http://113.93.50.63/data.js:4:1)
-                 *  //firefox4+ 可以用document.currentScript
-                 */
-                stack = stack.split(/[@ ]/g).pop() //取得最后一行,最后一个空格或@之后的部分
-                stack = stack[0] === "(" ? stack.slice(1, -1) : stack.replace(/\s/, "") //去掉换行符
-                return stack.replace(/(:\d+)?:\d+$/i, "") //去掉行号与或许存在的出错字符起始位置
-            }
-            var nodes = (base ? DOC : head).getElementsByTagName("script") //只在head标签中寻找
-            for (var i = nodes.length, node; node = nodes[--i]; ) {
-                if ((base || node.className === subscribers) && node.readyState === "interactive") {
-                    return node.className = node.src
-                }
+
+    function getCurrentScript(base) {
+        // 参考 https://github.com/samyk/jiagra/blob/master/jiagra.js
+        var stack
+        try {
+            a.b.c() //强制报错,以便捕获e.stack
+        } catch (e) { //safari的错误对象只有line,sourceId,sourceURL
+            stack = e.stack
+            if (!stack && window.opera) {
+                //opera 9没有e.stack,但有e.Backtrace,但不能直接取得,需要对e对象转字符串进行抽取
+                stack = (String(e).match(/of linked script \S+/g) || []).join(" ")
             }
         }
-
-        function checkCycle(deps, nick) {
-            //检测是否存在循环依赖
-            for (var id in deps) {
-                if (deps[id] === "司徒正美" && modules[id].state !== 2 && (id === nick || checkCycle(modules[id].deps, nick))) {
-                    return true
-                }
+        if (stack) {
+            /**e.stack最后一行在所有支持的浏览器大致如下:
+             *chrome23:
+             * at http://113.93.50.63/data.js:4:1
+             *firefox17:
+             *@http://113.93.50.63/query.js:4
+             *opera12:http://www.oldapps.com/opera.php?system=Windows_XP
+             *@http://113.93.50.63/data.js:4
+             *IE10:
+             *  at Global code (http://113.93.50.63/data.js:4:1)
+             *  //firefox4+ 可以用document.currentScript
+             */
+            stack = stack.split(/[@ ]/g).pop() //取得最后一行,最后一个空格或@之后的部分
+            stack = stack[0] === "(" ? stack.slice(1, -1) : stack.replace(/\s/, "") //去掉换行符
+            return stack.replace(/(:\d+)?:\d+$/i, "") //去掉行号与或许存在的出错字符起始位置
+        }
+        var nodes = (base ? DOC : head).getElementsByTagName("script") //只在head标签中寻找
+        for (var i = nodes.length, node; node = nodes[--i]; ) {
+            if ((base || node.className === subscribers) && node.readyState === "interactive") {
+                return node.className = node.src
             }
         }
+    }
 
-        function checkDeps() {
-            //检测此JS模块的依赖是否都已安装完毕,是则安装自身
-            loop: for (var i = loadings.length, id; id = loadings[--i]; ) {
-                var obj = modules[id],
-                        deps = obj.deps
-                for (var key in deps) {
-                    if (ohasOwn.call(deps, key) && modules[key].state !== 2) {
-                        continue loop
-                    }
-                }
-                //如果deps是空对象或者其依赖的模块的状态都是2
-                if (obj.state !== 2) {
-                    loadings.splice(i, 1) //必须先移除再安装，防止在IE下DOM树建完后手动刷新页面，会多次执行它
-                    fireFactory(obj.id, obj.args, obj.factory)
-                    checkDeps() //如果成功,则再执行一次,以防有些模块就差本模块没有安装好
-                }
-            }
-        }
-
-        function checkFail(node, onError, fuckIE) {
-            var id = cleanUrl(node.src) //检测是否死链
-            node.onload = node.onreadystatechange = node.onerror = null
-            if (onError || (fuckIE && !modules[id].state)) {
-                setTimeout(function() {
-                    head.removeChild(node)
-                })
-                log("加载 " + id + " 失败" + onError + " " + (!modules[id].state))
-            } else {
+    function checkCycle(deps, nick) {
+        //检测是否存在循环依赖
+        for (var id in deps) {
+            if (deps[id] === "司徒正美" && modules[id].state !== 2 && (id === nick || checkCycle(modules[id].deps, nick))) {
                 return true
             }
         }
-
-        function loadResources(url, parent, ret, shim) {
-            //1. 特别处理mass|ready标识符
-            if (url === "ready!") {
-                return url
-            }
-            //2. 转化为完整路径
-            if (kernel.alias[url]) { //别名机制
-                ret = kernel.alias[url]
-                if (typeof ret === "object") {
-                    shim = ret
-                    ret = ret.src
-                }
-            }
-            //3.  处理text!  css! 等资源
-            var plugin
-            url = url.replace(/^\w+!/, function(a) {
-                plugin = a.slice(0, -1)
-                return ""
-            })
-            plugin = plugin || "js"
-            plugin = plugins[plugin] || noop;
-            //4. 补全路径
-            if (/^(\w+)(\d)?:.*/.test(url)) {
-                ret = url
-            } else {
-                parent = parent.substr(0, parent.lastIndexOf('/'))
-                var tmp = url.charAt(0)
-                if (tmp !== "." && tmp !== "/") { //相对于根路径
-                    ret = basepath + url
-                } else if (url.slice(0, 2) === "./") { //相对于兄弟路径
-                    ret = parent + url.slice(1)
-                } else if (url.slice(0, 2) === "..") { //相对于父路径
-                    var arr = parent.replace(/\/$/, "").split("/")
-                    tmp = url.replace(/\.\.\//g, function() {
-                        arr.pop()
-                        return ""
-                    })
-                    ret = arr.join("/") + "/" + tmp
-                } else if (tmp === "/") {
-                    ret = parent + url //相对于兄弟路径
-                } else {
-                    avalon.error("不符合模块标识规则: " + url)
-                }
-            }
-            //5. 补全扩展名
-            url = cleanUrl(ret)
-            var ext = plugin.ext
-            if (ext) {
-                if (url.slice(0 - ext.length) !== ext) {
-                    ret += ext;
-                }
-            }
-            //6. 缓存处理
-            if (kernel.nocache) {
-                ret += (ret.indexOf("?") === -1 ? "?" : "&") + (new Date - 0)
-            }
-            return plugin(ret, modules, shim, checkDeps)
-        }
-
-        function loadJS(url, id, callback) {
-            //通过script节点加载目标模块
-            var node = DOC.createElement("script")
-            node.className = subscribers //让getCurrentScript只处理类名为subscribers的script节点
-            node[W3C ? "onload" : "onreadystatechange"] = function() {
-                if (W3C || /loaded|complete/i.test(node.readyState)) {
-                    //mass Framework会在_checkFail把它上面的回调清掉，尽可能释放回存，尽管DOM0事件写法在IE6下GC无望
-                    var factory = factorys.pop()
-                    factory && factory.delay(id)
-                    if (callback) {
-                        callback()
-                    }
-                    if (checkFail(node, false, !W3C)) {
-                        log("已成功加载 " + url)
-                    }
-                }
-            }
-            node.onerror = function() {
-                checkFail(node, true)
-            }
-            node.src = url //插入到head的第一个节点前，防止IE6下head标签没闭合前使用appendChild抛错
-            head.insertBefore(node, head.firstChild) //chrome下第二个参数不能为null
-            log("正准备加载 " + url) //更重要的是IE6下可以收窄getCurrentScript的寻找范围
-        }
-
-        window.require = avalon.require = function(list, factory, parent) {
-            // 用于检测它的依赖是否都为2
-            var deps = {},
-                    // 用于保存依赖模块的返回值
-                    args = [],
-                    // 需要安装的模块数
-                    dn = 0,
-                    // 已安装完的模块数
-                    cn = 0,
-                    id = parent || "callback" + setTimeout("1")
-            parent = parent || basepath
-            String(list).replace(rword, function(el) {
-                var url = loadResources(el, parent)
-                if (url) {
-                    dn++
-                    if (modules[url] && modules[url].state === 2) {
-                        cn++
-                    }
-                    if (!deps[url]) {
-                        args.push(url)
-                        deps[url] = "司徒正美" //去重
-                    }
-                }
-            })
-            modules[id] = {//创建一个对象,记录模块的加载情况与其他信息
-                id: id,
-                factory: factory,
-                deps: deps,
-                args: args,
-                state: 1
-            }
-            if (dn === cn) { //如果需要安装的等于已安装好的
-                fireFactory(id, args, factory) //安装到框架中
-            } else {
-                //放到检测列队中,等待checkDeps处理
-                loadings.unshift(id)
-            }
-            checkDeps()
-        }
-        avalon.config = require.config = kernel
-        /**
-         * 定义模块
-         * @param {String} id ? 模块ID
-         * @param {Array} deps ? 依赖列表
-         * @param {Function} factory 模块工厂
-         * @api public
-         */
-        window.define = require.define = function(id, deps, factory) { //模块名,依赖列表,模块本身
-            var args = avalon.slice(arguments)
-
-            if (typeof id === "string") {
-                var _id = args.shift()
-
-            }
-            if (typeof args[0] === "boolean") { //用于文件合并, 在标准浏览器中跳过补丁模块
-                if (args[0]) {
-                    return
-                }
-                args.shift()
-            }
-            if (typeof args[0] === "function") {
-                args.unshift([])
-            } //上线合并后能直接得到模块ID,否则寻找当前正在解析中的script节点的src作为模块ID
-            //现在除了safari外，我们都能直接通过getCurrentScript一步到位得到当前执行的script节点，
-            //safari可通过onload+delay闭包组合解决
-            id = modules[id] && modules[id].state >= 1 ? _id : cleanUrl(getCurrentScript())
-            factory = args[1]
-            factory.id = _id //用于调试
-            factory.delay = function(id) {
-                args.push(id)
-                var isCycle = true
-                try {
-                    isCycle = checkCycle(modules[id].deps, id)
-                } catch (e) {
-                }
-                if (isCycle) {
-                    avalon.error(id + "模块与之前的某些模块存在循环依赖")
-                }
-                delete factory.delay //释放内存
-                require.apply(null, args) //0,1,2 --> 1,2,0
-            }
-            if (id) {
-                factory.delay(id, args)
-            } else { //先进先出
-                factorys.push(factory)
-            }
-        }
-        define.amd = modules
-
-        function fireFactory(id, deps, factory) {
-            for (var i = 0, array = [], d; d = deps[i++]; ) {
-                array.push(modules[d].exports)
-            }
-            var module = Object(modules[id]),
-                    ret = factory.apply(window, array)
-            module.state = 2
-            if (ret !== void 0) {
-                modules[id].exports = ret
-            }
-            return ret
-        }
-        //============================domReady机制===========================
-        var ready = W3C ? "DOMContentLoaded" : "readystatechange"
-
-        function fireReady() {
-            modules["ready!"].state = 2
-            checkDeps()
-            fireReady = noop //隋性函数，防止IE9二次调用_checkDeps
-        }
-
-        function doScrollCheck() {
-            try { //IE下通过doScrollCheck检测DOM树是否建完
-                root.doScroll("left")
-                fireReady()
-            } catch (e) {
-                setTimeout(doScrollCheck)
-            }
-        }
-
-        if (DOC.readyState === "complete") {
-            fireReady() //如果在domReady之外加载
-        } else if (W3C) {
-            DOC.addEventListener(ready, function() {
-                fireReady()
-            })
-        } else {
-            DOC.attachEvent("onreadychange", function() {
-                if (DOC.readyState === "complete") {
-                    fireReady()
-                }
-            })
-            if (root.doScroll) {
-                doScrollCheck()
-            }
-        }
-
     }
 
+    function checkDeps() {
+        //检测此JS模块的依赖是否都已安装完毕,是则安装自身
+        loop: for (var i = loadings.length, id; id = loadings[--i]; ) {
+            var obj = modules[id],
+                    deps = obj.deps
+            for (var key in deps) {
+                if (ohasOwn.call(deps, key) && modules[key].state !== 2) {
+                    continue loop
+                }
+            }
+            //如果deps是空对象或者其依赖的模块的状态都是2
+            if (obj.state !== 2) {
+                loadings.splice(i, 1) //必须先移除再安装，防止在IE下DOM树建完后手动刷新页面，会多次执行它
+                fireFactory(obj.id, obj.args, obj.factory)
+                checkDeps() //如果成功,则再执行一次,以防有些模块就差本模块没有安装好
+            }
+        }
+    }
+
+    function checkFail(node, onError, fuckIE) {
+        var id = cleanUrl(node.src) //检测是否死链
+        node.onload = node.onreadystatechange = node.onerror = null
+        if (onError || (fuckIE && !modules[id].state)) {
+            setTimeout(function() {
+                head.removeChild(node)
+            })
+            log("加载 " + id + " 失败" + onError + " " + (!modules[id].state))
+        } else {
+            return true
+        }
+    }
+
+    function loadResources(url, parent, ret, shim) {
+        //1. 特别处理mass|ready标识符
+        if (url === "ready!") {
+            return url
+        }
+        //2. 转化为完整路径
+        if (kernel.alias[url]) { //别名机制
+            ret = kernel.alias[url]
+            if (typeof ret === "object") {
+                shim = ret
+                ret = ret.src
+            }
+        }
+        //3.  处理text!  css! 等资源
+        var plugin
+        url = url.replace(/^\w+!/, function(a) {
+            plugin = a.slice(0, -1)
+            return ""
+        })
+        plugin = plugin || "js"
+        plugin = plugins[plugin] || noop;
+        //4. 补全路径
+        if (/^(\w+)(\d)?:.*/.test(url)) {
+            ret = url
+        } else {
+            parent = parent.substr(0, parent.lastIndexOf('/'))
+            var tmp = url.charAt(0)
+            if (tmp !== "." && tmp !== "/") { //相对于根路径
+                ret = basepath + url
+            } else if (url.slice(0, 2) === "./") { //相对于兄弟路径
+                ret = parent + url.slice(1)
+            } else if (url.slice(0, 2) === "..") { //相对于父路径
+                var arr = parent.replace(/\/$/, "").split("/")
+                tmp = url.replace(/\.\.\//g, function() {
+                    arr.pop()
+                    return ""
+                })
+                ret = arr.join("/") + "/" + tmp
+            } else if (tmp === "/") {
+                ret = parent + url //相对于兄弟路径
+            } else {
+                avalon.error("不符合模块标识规则: " + url)
+            }
+        }
+        //5. 补全扩展名
+        url = cleanUrl(ret)
+        var ext = plugin.ext
+        if (ext) {
+            if (url.slice(0 - ext.length) !== ext) {
+                ret += ext;
+            }
+        }
+        //6. 缓存处理
+        if (kernel.nocache) {
+            ret += (ret.indexOf("?") === -1 ? "?" : "&") + (new Date - 0)
+        }
+        return plugin(ret, modules, shim, checkDeps)
+    }
+
+    function loadJS(url, id, callback) {
+        //通过script节点加载目标模块
+        var node = DOC.createElement("script")
+        node.className = subscribers //让getCurrentScript只处理类名为subscribers的script节点
+        node[W3C ? "onload" : "onreadystatechange"] = function() {
+            if (W3C || /loaded|complete/i.test(node.readyState)) {
+                //mass Framework会在_checkFail把它上面的回调清掉，尽可能释放回存，尽管DOM0事件写法在IE6下GC无望
+                var factory = factorys.pop()
+                factory && factory.delay(id)
+                if (callback) {
+                    callback()
+                }
+                if (checkFail(node, false, !W3C)) {
+                    log("已成功加载 " + url)
+                }
+            }
+        }
+        node.onerror = function() {
+            checkFail(node, true)
+        }
+        node.src = url //插入到head的第一个节点前，防止IE6下head标签没闭合前使用appendChild抛错
+        head.insertBefore(node, head.firstChild) //chrome下第二个参数不能为null
+        log("正准备加载 " + url) //更重要的是IE6下可以收窄getCurrentScript的寻找范围
+    }
+
+    window.require = avalon.require = function(list, factory, parent) {
+        // 用于检测它的依赖是否都为2
+        var deps = {},
+                // 用于保存依赖模块的返回值
+                args = [],
+                // 需要安装的模块数
+                dn = 0,
+                // 已安装完的模块数
+                cn = 0,
+                id = parent || "callback" + setTimeout("1")
+        parent = parent || basepath
+        String(list).replace(rword, function(el) {
+            var url = loadResources(el, parent)
+            if (url) {
+                dn++
+                if (modules[url] && modules[url].state === 2) {
+                    cn++
+                }
+                if (!deps[url]) {
+                    args.push(url)
+                    deps[url] = "司徒正美" //去重
+                }
+            }
+        })
+        modules[id] = {//创建一个对象,记录模块的加载情况与其他信息
+            id: id,
+            factory: factory,
+            deps: deps,
+            args: args,
+            state: 1
+        }
+        if (dn === cn) { //如果需要安装的等于已安装好的
+            fireFactory(id, args, factory) //安装到框架中
+        } else {
+            //放到检测列队中,等待checkDeps处理
+            loadings.unshift(id)
+        }
+        checkDeps()
+    }
+    avalon.config = require.config = kernel
+    /**
+     * 定义模块
+     * @param {String} id ? 模块ID
+     * @param {Array} deps ? 依赖列表
+     * @param {Function} factory 模块工厂
+     * @api public
+     */
+    window.define = require.define = function(id, deps, factory) { //模块名,依赖列表,模块本身
+        var args = avalon.slice(arguments)
+
+        if (typeof id === "string") {
+            var _id = args.shift()
+
+        }
+        if (typeof args[0] === "boolean") { //用于文件合并, 在标准浏览器中跳过补丁模块
+            if (args[0]) {
+                return
+            }
+            args.shift()
+        }
+        if (typeof args[0] === "function") {
+            args.unshift([])
+        } //上线合并后能直接得到模块ID,否则寻找当前正在解析中的script节点的src作为模块ID
+        //现在除了safari外，我们都能直接通过getCurrentScript一步到位得到当前执行的script节点，
+        //safari可通过onload+delay闭包组合解决
+        id = modules[id] && modules[id].state >= 1 ? _id : cleanUrl(getCurrentScript())
+        factory = args[1]
+        factory.id = _id //用于调试
+        factory.delay = function(id) {
+            args.push(id)
+            var isCycle = true
+            try {
+                isCycle = checkCycle(modules[id].deps, id)
+            } catch (e) {
+            }
+            if (isCycle) {
+                avalon.error(id + "模块与之前的某些模块存在循环依赖")
+            }
+            delete factory.delay //释放内存
+            require.apply(null, args) //0,1,2 --> 1,2,0
+        }
+        if (id) {
+            factory.delay(id, args)
+        } else { //先进先出
+            factorys.push(factory)
+        }
+    }
+    define.amd = modules
+
+    function fireFactory(id, deps, factory) {
+        for (var i = 0, array = [], d; d = deps[i++]; ) {
+            array.push(modules[d].exports)
+        }
+        var module = Object(modules[id]),
+                ret = factory.apply(window, array)
+        module.state = 2
+        if (ret !== void 0) {
+            modules[id].exports = ret
+        }
+        return ret
+    }
+    //============================domReady机制===========================
+    var ready = W3C ? "DOMContentLoaded" : "readystatechange"
+
+    function fireReady() {
+        modules["ready!"].state = 2
+        checkDeps()
+        fireReady = noop //隋性函数，防止IE9二次调用_checkDeps
+    }
+
+    function doScrollCheck() {
+        try { //IE下通过doScrollCheck检测DOM树是否建完
+            root.doScroll("left")
+            fireReady()
+        } catch (e) {
+            setTimeout(doScrollCheck)
+        }
+    }
+
+    if (DOC.readyState === "complete") {
+        fireReady() //如果在domReady之外加载
+    } else if (W3C) {
+        DOC.addEventListener(ready, function() {
+            fireReady()
+        })
+    } else {
+        DOC.attachEvent("onreadychange", function() {
+            if (DOC.readyState === "complete") {
+                fireReady()
+            }
+        })
+        if (root.doScroll) {
+            doScrollCheck()
+        }
+    }
 
     /*********************************************************************
      *                      迷你jQuery对象的原型方法                    *
@@ -1275,8 +1271,7 @@
                 VBPublics = Object.keys(watchOne) //用于IE6-8
         model = model || {}
         skipArray = Array.isArray(skipArray) ? skipArray.concat(VBPublics) : VBPublics
-
-        function loop(name, value) {
+        forEach(scope, function(name, value) {
             if (!watchOne[name]) {
                 model[name] = value
             }
@@ -1304,8 +1299,10 @@
                             }
                             if (oldArgs !== neo) { //由于VBS对象不能用Object.prototype.toString来判定类型，我们就不做严密的检测
                                 oldArgs = neo
-                                notifySubscribers(accessor) //通知顶层改变
-                                vmodel.$events && vmodel.$fire(name, neo, value)
+                                avalon.nextTick(function() {
+                                    notifySubscribers(accessor) //通知顶层改变
+                                    vmodel.$events && vmodel.$fire(name, neo, value)
+                                })
                             }
                         } else {
                             if (openComputedCollect || !accessor.locked) {
@@ -1338,8 +1335,10 @@
                                     value = neo
                                 }
                                 model[name] = value && value.$id ? value.$model : value
-                                notifySubscribers(accessor) //通知顶层改变
-                                vmodel.$events && vmodel.$fire(name, value, old)
+                                avalon.nextTick(function() {
+                                    notifySubscribers(accessor) //通知顶层改变
+                                    vmodel.$events && vmodel.$fire(name, value, old)
+                                })
                             }
                         } else {
                             collectSubscribers(accessor) //收集视图函数
@@ -1354,10 +1353,7 @@
                     enumerable: true
                 }
             }
-        }
-        for (var i in scope) {
-            loop(i, scope[i])
-        }
+        })
 
         vmodel = defineProperties(vmodel, Descriptions, VBPublics)
         VBPublics.forEach(function(name) {
@@ -1448,7 +1444,7 @@
                     buffer.push("\tPublic [" + name + "]") //你可以预先放到skipArray中
                 }
             })
-            for (var name in description) {
+            Object.keys(description).forEach(function(name) {
                 owner[name] = true
                 buffer.push(
                         //由于不知对方会传入什么,因此set, let都用上
@@ -1466,7 +1462,7 @@
                         "\tEnd If",
                         "\tOn Error Goto 0",
                         "\tEnd Property")
-            }
+            })
             buffer.push("End Class") //类定义完毕
             buffer.push(
                     "Function " + className + "Factory(a, b)", //创建实例并传入两个关键的参数
@@ -1693,134 +1689,39 @@
      *                          Parse                                    *
      **********************************************************************/
 
-    var keywords =
-            // 关键字
-            'break,case,catch,continue,debugger,default,delete,do,else,false'
-            + ',finally,for,function,if,in,instanceof,new,null,return,switch,this'
-            + ',throw,true,try,typeof,var,void,while,with'
-
-            // 保留字
-            + ',abstract,boolean,byte,char,class,const,double,enum,export,extends'
-            + ',final,float,goto,implements,import,int,interface,long,native'
-            + ',package,private,protected,public,short,static,super,synchronized'
-            + ',throws,transient,volatile'
-
-            // ECMA 5 - use strict
-            + ',arguments,let,yield'
-
-            + ',undefined';
-    var rrexpstr = /\/\*(?:.|\n)*?\*\/|\/\/[^\n]*\n|\/\/[^\n]*$|'[^']*'|"[^"]*"|[\s\t\n]*\.[\s\t\n]*[$\w\.]+/g;
-    var rsplit = /[^\w$]+/g;
-    var rkeywords = new RegExp(["\\b" + keywords.replace(/,/g, '\\b|\\b') + "\\b"].join('|'), 'g');
-    var rnumber = /\b\d[^,]*/g;
-    var rcomma = /^,+|,+$/g;
-    var getVariables = function(code) {
-        code = code
-                .replace(rrexpstr, '')
-                .replace(rsplit, ',')
-                .replace(rkeywords, '')
-                .replace(rnumber, '')
-                .replace(rcomma, '')
-
-        return code ? code.split(/,+/) : []
-    };
-
-    //添加赋值语句
-    function addAssign(vars, scope, name) {
-        var ret = [], prefix = " = " + name + "."
-        for (var i = vars.length; name = vars[--i]; ) {
-            name = vars[i]
-            if (scope.hasOwnProperty(name)) {
-                ret.push(name + prefix + name)
-                vars.splice(i, 1)
-            }
-        }
-        return ret
-
-    }
-    function uniqArray(arr, vm) {
-        var length = arr.length;
-        if (length <= 1) {
-            return arr
-        } else if (length === 2) {
-            return arr[0] !== arr[1] ? arr : [arr[0]]
-        }
-        var uniq = {}
-        return arr.filter(function(el) {
-            if (!uniq[vm ? el.$id : el]) {
-                uniq[vm ? el.$id : el] = 1
-                return true;
-            }
-            return false
-        })
-    }
-    //取得求值函数及其传参
-    var rvar = /^\w+$/
-    function parseExpr(code, scopes, data) {
-        var vars = rvar.test(code) ? [code] : getVariables(code), assigns = [], names = [], args = [], prefix = ""
-        //args 是一个对象数组， names 是将要生成的求值函数的参数
-        vars = uniqArray(vars), scopes = uniqArray(scopes, 1)
-        for (var i = 0, n = scopes.length; i < n; i++) {
-            if (vars.length) {
-                var name = "vm" + expose + "_" + i
-                names.push(name)
-                args.push(scopes[i])
-                assigns.push.apply(assigns, addAssign(vars, scopes[i], name))
-            }
-        }
-        var prefix = assigns.join(", ")
-        if (prefix) {
-            prefix = "var " + prefix
-        }
-
-        if (data.filters) {
-            code = "\nvar ret" + expose + " = " + code
-            var textBuffer = [],
-                    fargs
-            textBuffer.push(code, "\r\n")
-            for (var i = 0, fname; fname = data.filters[i++]; ) {
-                var start = fname.indexOf("(")
-                if (start !== -1) {
-                    fargs = fname.slice(start + 1, fname.lastIndexOf(")")).trim()
-                    fargs = "," + fargs
-                    fname = fname.slice(0, start).trim()
-                } else {
-                    fargs = ""
+    function getValueFunction(name, scopes) { //得到求值函数,及其作用域
+        var n = name.split(".")
+        for (var i = 0, scope, ok; scope = scopes[i++]; ) {
+            try {
+                if (scope.hasOwnProperty(n[0]) && (n.length < 2 || scope[n[0]].hasOwnProperty(n[1]))) {
+                    var fn = Function("scope", "value", "if(arguments.length === 1){ return scope." + name + " }else{ scope." + name + " = value  }")
+                    fn(scope)
+                    ok = scope
+                    break
                 }
-                textBuffer.push(" if(filters", expose, ".", fname, "){\n\ttry{\nret", expose,
-                        " = filters", expose, ".", fname, "(ret", expose, fargs, ")\n\t}catch(e){} \n}\n")
+            } catch (e) {
             }
-            code = textBuffer.join("")
-            code += "\nreturn ret" + expose
-            names.push("filters" + expose)
-            args.push(avalon.filters)
-            delete data.filters //释放内存
-        } else {
-            code = "\nreturn " + code
         }
-        try {
-            var fn = Function.apply(Function, names.concat("'use strict';\n" + prefix + code))
-            fn.apply(fn, args)
-            return [fn, args]
-        } catch (e) {
-            data.remove = false
-        } finally {
-            textBuffer = names = null //释放内存
+        if (ok) {
+            return [fn, ok]
         }
     }
 
     function watchView(text, scopes, data, callback, tokens) {
-        var array, updateView = avalon.noop
-        if (!tokens) {
-            array = parseExpr(text, scopes, data)
+        var updateView, array, filters = data.filters,
+                updateView = avalon.noop
+        if (!filters && !tokens) {
+            array = getValueFunction(text.trim(), scopes)
             if (array) {
-                var fn = array[0],
-                        args = array[1]
-                updateView = function() {
-                    callback(fn.apply(fn, args), data.element)
-                }
+                array = [array[0],
+                    [array[1]]
+                ] //强制转数组,方便使用apply
             }
-        } else {
+        }
+        if (!array && !tokens) {
+            array = parseExpr(text, scopes, data)
+        }
+        if (!array && tokens) {
             array = tokens.map(function(token) {
                 return token.expr ? parseExpr(token.value, scopes, data) || "" : token.value
             })
@@ -1839,8 +1740,14 @@
                     return b(ret, data.element)
                 }
             })(array, callback)
-        }
+        } else if (array) {
 
+            var fn = array[0],
+                    args = array[1]
+            updateView = function() {
+                callback(fn.apply(fn, args), data.element)
+            }
+        }
         updateView.toString = function() {
             return "eval(" + text + ")"
         } //方便调试
@@ -1852,6 +1759,56 @@
         updateView()
         openComputedCollect = false
         delete Publish[expose]
+    }
+
+    function parseExpr(text, scopes, data) {
+        var names = [],
+                args = [],
+                random = new Date - 0,
+                val
+        //取得ViewModel的名字
+        scopes.forEach(function(scope) {
+            var scopeName = scope.$id.replace(/-/g, "_") + "" + random
+            if (names.indexOf(scopeName) === -1) {
+                names.push(scopeName)
+                args.push(scope)
+            }
+        })
+        text = "var ret" + random + " = " + text + "\r\n"
+        for (var i = 0, name; name = names[i++]; ) {
+            text = "with(" + name + "){\r\n" + text + "}\r\n"
+        }
+        if (data.filters) {
+            var textBuffer = [],
+                    fargs
+            textBuffer.push(text, "\r\n")
+            for (var i = 0, f; f = data.filters[i++]; ) {
+                var start = f.indexOf("(")
+                if (start !== -1) {
+                    fargs = f.slice(start + 1, f.lastIndexOf(")")).trim()
+                    fargs = "," + fargs
+                    f = f.slice(0, start).trim()
+                } else {
+                    fargs = ""
+                }
+                textBuffer.push(" if(filters", random, ".", f, "){\r\n\ttry{ret", random,
+                        " = filters", random, ".", f, "(ret", random, fargs, ")}catch(e){} \r\n}\r\n")
+            }
+            text = textBuffer.join("")
+            names.push("filters" + random)
+            args.push(avalon.filters)
+            delete data.filters //释放内存
+        }
+        try {
+            text += "\r\nreturn ret" + random
+            var fn = Function.apply(Function, names.concat(text))
+            val = fn.apply(fn, args)
+            return [fn, args]
+        } catch (e) {
+            data.remove = false
+        } finally {
+            textBuffer = names = null //释放内存
+        }
     }
     /*********************************************************************
      *                         Bind                                    *
@@ -2152,15 +2109,15 @@
         var element = data.element
         var tagName = element.tagName
         if (typeof modelBinding[tagName] === "function") {
-            var array = parseExpr(data.value, vmodels, data)
+            var array = getValueFunction(data.value.trim(), vmodels)
             if (array) {
-                modelBinding[tagName](element, array[1][0], data.value.trim())
+                modelBinding[tagName](element, array[0], array[1])
             }
         }
     }
     //如果一个input标签添加了model绑定。那么它对应的字段将与元素的value连结在一起
     //字段变，value就变；value变，字段也跟着变。默认是绑定input事件，
-    modelBinding.INPUT = function(element, vmodel, prop) {
+    modelBinding.INPUT = function(element, fn, scope) {
         if (element.name === void 0) {
             element.name = generateID()
         }
@@ -2169,12 +2126,12 @@
         //当value变化时改变model的值
         var updateModel = function() {
             if (god.data("observe") !== false) {
-                vmodel[prop] = element.value
+                fn(scope, element.value)
             }
         }
         //当model变化时,它就会改变value的值
         var updateView = function() { //先执行updateView
-            var neo = vmodel[prop]
+            var neo = fn(scope)
             if (neo !== element.value) {
                 element.value = neo
             }
@@ -2202,12 +2159,12 @@
             }
         } else if (type === "radio") {
             updateView = function() {
-                element.checked = !!vmodel[prop]
+                element.checked = !!fn(scope)
             }
             updateModel = function() {
                 if (god.data("observe") !== false) {
                     var val = !element.beforeChecked
-                    vmodel[prop] = val
+                    fn(scope, val)
                     element.beforeChecked = element.checked = val
                 }
             }
@@ -2225,11 +2182,11 @@
             updateModel = function() {
                 if (god.data("observe") !== false) {
                     var method = element.checked ? "ensure" : "remove"
-                    avalon.Array[method](vmodel[prop], element.value)
+                    avalon.Array[method](fn(scope), element.value)
                 }
             }
             updateView = function() {
-                var array = [].concat(vmodel[prop]) //强制转换为数组
+                var array = [].concat(fn(scope)) //强制转换为数组
                 element.checked = array.indexOf(element.value) >= 0
             }
             god.bind("click", updateModel) //IE6-8
@@ -2239,21 +2196,21 @@
         updateView()
         delete Publish[expose]
     }
-    modelBinding.SELECT = function(element, vmodel, prop, oldValue) {
+    modelBinding.SELECT = function(element, fn, scope, oldValue) {
         var god = avalon(element)
 
         function updateModel() {
             if (god.data("observe") !== false) {
                 var neo = god.val()
                 if (neo + "" !== oldValue) {
-                    vmodel[prop] = neo
+                    fn(scope, neo)
                     oldValue = neo + ""
                 }
             }
         }
 
         function updateView() {
-            var neo = vmodel[prop]
+            var neo = fn(scope)
             if (neo + "" !== oldValue) {
                 god.val(neo)
                 oldValue = neo + ""
@@ -2329,20 +2286,16 @@
                         ret
                 if (/push|unshift|splice/.test(method)) {
                     var margs = [].slice.call(arguments)
-
                     var vmargs = margs.map(syncModel, margs)
-
-                    list[method].apply(list, arguments)
-                    //  console.log(list.join(","))
+                    list[method].apply(list, margs)
                     ret = list[method].apply(this, vmargs)
                     notifySubscribers(this, method, vmargs, len)
-
                 } else {
                     list[method].call(this)
                     ret = list[method]()
                     notifySubscribers(this, method, arguments, len)
                 }
-                dynamic.length = list.length
+                dynamic.length = this.length
                 return ret
             }
         })
@@ -2447,12 +2400,12 @@
     }
     bindingHandlers["each"] = function(data, vmodels) {
         var parent = data.element
-        var array = parseExpr(data.value, vmodels, data)
+        var value = data.value
+        var array = parseExpr(value, vmodels, data)
         var list
         if (typeof array == "object") {
             list = array[0].apply(array[0], array[1])
         }
-
         if (typeof list !== "object") {
             return list
         }
@@ -2939,4 +2892,3 @@
 //avalon.type( 返回的类型是小写), avalon.isPlainObject, avalon.mix, 
 //avvalon.fn.mix(这两个方法与jQuery的extend方法完全一致)，
 //avalon.slice(与数组的slice用法一致，但可以切换类数组对象)， require， define全局方法
-//重构parser, modelBindings
